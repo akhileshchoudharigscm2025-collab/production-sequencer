@@ -981,10 +981,14 @@ function renderDashboard() {
 
     // 2. Inventory & Lost Sales Tables
     const currentOpt = document.getElementById('optGoal').value || 'combined';
-    const currentRes = state.lastResults[currentOpt][line];
 
-    renderDataTable('dashInventory', currentRes.schedule, 'inventory', `Inventory Levels (${typeLabels[currentOpt]})`);
-    renderDataTable('dashLostSales', currentRes.schedule, 'lostSales', `Lost Sales (${typeLabels[currentOpt]})`);
+    // Render Line 1
+    renderDataTable('dashInventoryL1', state.lastResults[currentOpt].L1.schedule, 'inventory', `L1 Inventory (${typeLabels[currentOpt]})`);
+    renderDataTable('dashLostSalesL1', state.lastResults[currentOpt].L1.schedule, 'lostSales', `L1 Lost Sales (${typeLabels[currentOpt]})`);
+
+    // Render Line 2
+    renderDataTable('dashInventoryL2', state.lastResults[currentOpt].L2.schedule, 'inventory', `L2 Inventory (${typeLabels[currentOpt]})`);
+    renderDataTable('dashLostSalesL2', state.lastResults[currentOpt].L2.schedule, 'lostSales', `L2 Lost Sales (${typeLabels[currentOpt]})`);
 }
 
 function renderDataTable(containerId, schedule, key, title) {
