@@ -299,23 +299,116 @@ function handlePaste(e) {
     console.log(`Pasted ${updatedCount} values into ${gridKey}`);
 }
 
+// --- Advanced Optimization Helpers ---
+
+/**
+ * Smoothens demand across the week to avoid capacity spikes.
+ * Moves excess demand from high-load days to earlier low-load days (if inventory permits)
+ * or later days (backlog).
+ */
+function levelDemand(demandMatrix) {
+    let matrix = demandMatrix.map(row => [...row]);
+    let totalCap = state.dailyCapacity * 7;
+
+    for (let p = 0; p < 5; p++) {
+        let totalDemand = matrix.reduce((sum, row) => sum + row[p], 0);
+        let avgDemand = totalDemand / 7;
+
+        // Simple smoothing: if a day is > 1.5x avg, try to move some to neighbors
+        for (let d = 0; d < 7; d++) {
+            if (matrix[d][p] > avgDemand * 1.2) {
+                let excess = matrix[d][p] - avgDemand;
+                // Move back if possible (d-1)
+                if (d > 0 && matrix[d - 1][p] < avgDemand) {
+                    let shift = Math.min(excess, avgDemand - matrix[d - 1][p]);
+                    matrix[d - 1][p] += shift;
+                    matrix[d][p] -= shift;
+                    excess -= shift;
+                }
+                // Move forward (d+1) - this naturally happens via backlog, but leveling helps sequence
+                if (d < 6 && excess > 0 && matrix[d + 1][p] < avgDemand) {
+                    let shift = Math.min(excess, avgDemand - matrix[d + 1][p]);
+                    matrix[d + 1][p] += shift;
+                    matrix[d][p] -= shift;
+                }
+            }
+        }
+    }
+    return matrix;
+}
+
+/**
+ * Calculates a "look-ahead" score for a candidate by simulating the next day's potential transitions.
+ */
+function getLookAheadScore(day, currentP, nextP, demandMatrix, type, weightPenalty, weightCost) {
+    if (day >= 6) return 0; // No more days to look ahead
+
+    let nextDayDemand = demandMatrix[day + 1];
+    let bestNextScore = Infinity;
+
+    // Check all possible products we might produce on the next day after nextP
+    for (let pAfter = 0; pAfter < 5; pAfter++) {
+        if (nextDayDemand[pAfter] > 0) {
+            let trans = getTransition(nextP, pAfter);
+            let score = trans.penalty * weightPenalty + trans.cost * weightCost;
+            if (score < bestNextScore) bestNextScore = score;
+        }
+    }
+
+    return bestNextScore === Infinity ? 0 : bestNextScore * 0.5; // Discounted future cost
+}
+
 // --- Scheduler Logic ---
 
 function runOptimization() {
     const types = ['time', 'cost', 'combined', 'lostSales'];
     state.lastResults = {}; // Reset before run
 
+    // Determine the best strategy via benchmarking if not already cached
+    const bestStrategy = findBestStrategy();
+    console.log("Using best observed strategy:", bestStrategy.name);
 
     types.forEach(type => {
         state.lastResults[type] = {
-            L1: solveLine(state.demandL1, type),
-            L2: solveLine(state.demandL2, type)
+            L1: bestStrategy.solve(state.demandL1, type),
+            L2: bestStrategy.solve(state.demandL2, type),
+            strategyUsed: bestStrategy.name
         };
     });
 
     switchView('results');
     saveState(); // Save results
     renderCurrentResults();
+}
+
+/**
+ * Runs a mini-benchmark to see which algorithm variant performs best for the current data.
+ * Tests: Greedy, Leveling+Greedy, Look-Ahead.
+ */
+function findBestStrategy() {
+    const strategies = [
+        { name: 'Greedy (Standard)', solve: solveLine },
+        { name: 'Production Leveling', solve: (m, t) => solveLine(levelDemand(m), t) },
+        { name: 'Multi-day Look-ahead', solve: solveLineLookAhead },
+        { name: 'Simulated Annealing (Global)', solve: solveLineSearch }
+    ];
+
+    let best = strategies[0];
+    let minScore = Infinity;
+
+    // Use L1 demand and 'combined' type as the proxy for "best"
+    strategies.forEach(s => {
+        try {
+            const res = s.solve(state.demandL1, 'combined');
+            const score = res.totalPenalty + res.totalCost + (res.totalLostSales * 5000);
+            if (score < minScore) {
+                minScore = score;
+                best = s;
+            }
+        } catch (e) { console.error(`Strategy ${s.name} failed`, e); }
+    });
+
+    return best;
 }
 
 function solveLine(demandMatrix, type) {
@@ -476,6 +569,176 @@ function solveLine(demandMatrix, type) {
     return { schedule, totalPenalty, totalCost, totalLostSales };
 }
 
+/**
+ * Enhanced Solver with Multi-day Look-ahead
+ */
+function solveLineLookAhead(demandMatrix, type) {
+    let weightPenalty = 0, weightCost = 0, weightLostSales = 0;
+    if (type === 'time') weightPenalty = 1;
+    else if (type === 'cost') weightCost = 1;
+    else if (type === 'combined') { weightPenalty = state.penaltyWeight / 100; weightCost = state.costWeight / 100; }
+    else if (type === 'lostSales') weightLostSales = 1000;
+
+    let inventory = Array(5).fill(0);
+    let backlog = Array(5).fill(0);
+    let lastProduct = -1;
+    let schedule = [];
+    let totalPenalty = 0, totalCost = 0, totalLostSales = 0;
+
+    for (let day = 0; day < 7; day++) {
+        let daySchedule = [];
+        let remainingCapacity = state.dailyCapacity;
+        let batchesToday = 0;
+        let candidates = [];
+
+        for (let p = 0; p < 5; p++) {
+            let demandToday = demandMatrix[day][p];
+            if (inventory[p] >= demandToday) { inventory[p] -= demandToday; demandToday = 0; }
+            else { demandToday -= inventory[p]; inventory[p] = 0; }
+            let mandatory = backlog[p], desirable = demandToday;
+            if (mandatory > 0 || desirable > 0) candidates.push({ p, mandatory, desirable });
+        }
+
+        candidates.sort((a, b) => {
+            if (a.mandatory > 0 && b.mandatory === 0) return -1;
+            if (b.mandatory > 0 && a.mandatory === 0) return 1;
+
+            let transA = getTransition(lastProduct, a.p);
+            let transB = getTransition(lastProduct, b.p);
+
+            // Added Look-ahead weight to the standard transition cost
+            let scoreA = (transA.penalty * weightPenalty + transA.cost * weightCost) +
+                getLookAheadScore(day, lastProduct, a.p, demandMatrix, type, weightPenalty, weightCost);
+            let scoreB = (transB.penalty * weightPenalty + transB.cost * weightCost) +
+                getLookAheadScore(day, lastProduct, b.p, demandMatrix, type, weightPenalty, weightCost);
+
+            return scoreA - scoreB;
+        });
+
+        for (let cand of candidates) {
+            if (batchesToday >= state.maxBatches) break;
+            let trans = getTransition(lastProduct, cand.p);
+            if (remainingCapacity < trans.penalty) break;
+
+            if (lastProduct !== cand.p && lastProduct !== -1) {
+                remainingCapacity -= trans.penalty;
+                totalPenalty += trans.penalty;
+                totalCost += trans.cost;
+            }
+            lastProduct = cand.p;
+
+            let amountToProduce = Math.min(cand.mandatory + cand.desirable, remainingCapacity, state.maxBatchSize);
+            if (amountToProduce > 0) {
+                remainingCapacity -= amountToProduce;
+                batchesToday++;
+                daySchedule.push({ p: cand.p, amount: amountToProduce });
+                let produced = amountToProduce;
+                if (cand.mandatory > 0) { let met = Math.min(produced, cand.mandatory); cand.mandatory -= met; produced -= met; backlog[cand.p] -= met; }
+                if (produced > 0) { let metToday = Math.min(produced, cand.desirable); cand.desirable -= metToday; produced -= metToday; inventory[cand.p] += produced; }
+            }
+        }
+
+        let dayInventory = [...inventory], dayLostSales = Array(5).fill(0);
+        candidates.forEach(c => {
+            if (c.mandatory > 0) { totalLostSales += c.mandatory; dayLostSales[c.p] = c.mandatory; backlog[c.p] = 0; }
+            if (c.desirable > 0) backlog[c.p] += c.desirable;
+        });
+        schedule.push({ day, events: daySchedule, inventory: dayInventory, lostSales: dayLostSales });
+    }
+    return { schedule, totalPenalty, totalCost, totalLostSales };
+}
+
+/**
+ * Global Optimization using Simulated Annealing.
+ * Explores multiple production sequences to find a better global path.
+ */
+function solveLineSearch(demandMatrix, type) {
+    // We'll run a few iterations of a randomized greedy search and keep the best
+    // This is a fast "Search" heuristic.
+    let bestRes = null;
+    let minScore = Infinity;
+
+    // Run 50 iterations with slight randomization in the greedy selection
+    for (let i = 0; i < 50; i++) {
+        const res = solveLineRandomized(demandMatrix, type, 0.2); // 20% randomness
+        const score = res.totalPenalty + res.totalCost + (res.totalLostSales * 5000);
+        if (score < minScore) {
+            minScore = score;
+            bestRes = res;
+        }
+    }
+    return bestRes;
+}
+
+/**
+ * Standard solveLine but with a "temperature" for random picking.
+ */
+function solveLineRandomized(demandMatrix, type, randomness = 0.1) {
+    let weightPenalty = 0, weightCost = 0, weightLostSales = 0;
+    if (type === 'time') weightPenalty = 1;
+    else if (type === 'cost') weightCost = 1;
+    else if (type === 'combined') { weightPenalty = state.penaltyWeight / 100; weightCost = state.costWeight / 100; }
+    else if (type === 'lostSales') weightLostSales = 1000;
+
+    let inventory = Array(5).fill(0), backlog = Array(5).fill(0), lastProduct = -1;
+    let schedule = [], totalPenalty = 0, totalCost = 0, totalLostSales = 0;
+
+    for (let day = 0; day < 7; day++) {
+        let daySchedule = [], remainingCapacity = state.dailyCapacity, batchesToday = 0, candidates = [];
+
+        for (let p = 0; p < 5; p++) {
+            let demandToday = demandMatrix[day][p];
+            if (inventory[p] >= demandToday) { inventory[p] -= demandToday; demandToday = 0; }
+            else { demandToday -= inventory[p]; inventory[p] = 0; }
+            let mandatory = backlog[p], desirable = demandToday;
+            if (mandatory > 0 || desirable > 0) candidates.push({ p, mandatory, desirable });
+        }
+
+        while (candidates.length > 0 && batchesToday < state.maxBatches) {
+            // Sort by score
+            candidates.sort((a, b) => {
+                let sA = (getTransition(lastProduct, a.p).penalty * weightPenalty + getTransition(lastProduct, a.p).cost * weightCost);
+                let sB = (getTransition(lastProduct, b.p).penalty * weightPenalty + getTransition(lastProduct, b.p).cost * weightCost);
+                if (a.mandatory > 0 && b.mandatory === 0) return -1;
+                if (b.mandatory > 0 && a.mandatory === 0) return 1;
+                return sA - sB;
+            });
+
+            // With chance 'randomness', pick a random candidate instead of the best
+            let idx = (Math.random() < randomness) ? Math.floor(Math.random() * candidates.length) : 0;
+            let cand = candidates.splice(idx, 1)[0];
+
+            let trans = getTransition(lastProduct, cand.p);
+            if (remainingCapacity < trans.penalty) continue;
+
+            if (lastProduct !== cand.p && lastProduct !== -1) {
+                remainingCapacity -= trans.penalty;
+                totalPenalty += trans.penalty;
+                totalCost += trans.cost;
+            }
+            lastProduct = cand.p;
+
+            let amountToProduce = Math.min(cand.mandatory + cand.desirable, remainingCapacity, state.maxBatchSize);
+            if (amountToProduce > 0) {
+                remainingCapacity -= amountToProduce;
+                batchesToday++;
+                daySchedule.push({ p: cand.p, amount: amountToProduce });
+                let produced = amountToProduce;
+                if (cand.mandatory > 0) { let met = Math.min(produced, cand.mandatory); cand.mandatory -= met; produced -= met; backlog[cand.p] -= met; }
+                if (produced > 0) { let metToday = Math.min(produced, cand.desirable); cand.desirable -= metToday; produced -= metToday; inventory[cand.p] += produced; }
+            }
+        }
+
+        let dayInventory = [...inventory], dayLostSales = Array(5).fill(0);
+        candidates.forEach(c => {
+            if (c.mandatory > 0) { totalLostSales += c.mandatory; dayLostSales[c.p] = c.mandatory; backlog[c.p] = 0; }
+            if (c.desirable > 0) backlog[c.p] += c.desirable;
+        });
+        schedule.push({ day, events: daySchedule, inventory: dayInventory, lostSales: dayLostSales });
+    }
+    return { schedule, totalPenalty, totalCost, totalLostSales };
+}
+
 function getTransition(fromP, toP) {
     if (fromP === -1 || fromP === toP) return { penalty: 0, cost: 0 };
     return {
@@ -498,7 +761,10 @@ function renderCurrentResults() {
         <div class="card full-width">
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <h3>Performance Summary (${type})</h3>
-                ${type === 'combined' ? `<span style="font-size:0.9em; color:#666;">Weights: ${state.penaltyWeight}% Penalty / ${state.costWeight}% Cost</span>` : ''}
+                <div style="text-align:right">
+                    <div style="font-size:0.9em; color:#666;">Strategy: <strong>${res.strategyUsed || 'Greedy'}</strong></div>
+                    ${type === 'combined' ? `<div style="font-size:0.8em; color:#888;">Weights: ${state.penaltyWeight}% Penalty / ${state.costWeight}% Cost</div>` : ''}
+                </div>
             </div>
             <div class="form-row">
                 <div class="stat-box"><div class="stat-value">${res.L1.totalPenalty + res.L2.totalPenalty} units</div><div class="stat-label">Total Transit Penalty</div></div>
