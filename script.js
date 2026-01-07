@@ -8,6 +8,8 @@ let state = {
     dailyCapacity: 1000,
     maxBatchSize: 1000,
     maxBatches: 3,
+    penaltyWeight: 50,
+    costWeight: 50,
     transitionPenalty: [], // 5x5
     transitionCost: [], // 5x5
     demandL1: [], // 7 Days x 5 Products (Transposed)
@@ -63,6 +65,33 @@ document.addEventListener('DOMContentLoaded', () => {
             batchInput.value = state.maxBatchSize; // Restore value
             batchInput.addEventListener('change', (e) => {
                 state.maxBatchSize = parseInt(e.target.value) || 0;
+                saveState();
+            });
+        }
+
+        // Bind weights
+        const pWeightInput = document.getElementById('penaltyWeight');
+        const cWeightInput = document.getElementById('costWeight');
+
+        if (pWeightInput && cWeightInput) {
+            pWeightInput.value = state.penaltyWeight;
+            cWeightInput.value = state.costWeight;
+
+            pWeightInput.addEventListener('change', (e) => {
+                let val = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
+                state.penaltyWeight = val;
+                state.costWeight = 100 - val;
+                pWeightInput.value = state.penaltyWeight;
+                cWeightInput.value = state.costWeight;
+                saveState();
+            });
+
+            cWeightInput.addEventListener('change', (e) => {
+                let val = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
+                state.costWeight = val;
+                state.penaltyWeight = 100 - val;
+                cWeightInput.value = state.costWeight;
+                pWeightInput.value = state.penaltyWeight;
                 saveState();
             });
         }
@@ -291,10 +320,16 @@ function runOptimization() {
 
 function solveLine(demandMatrix, type) {
     let weightPenalty = 0, weightCost = 0, weightLostSales = 0;
-    if (type === 'time') weightPenalty = 1;
-    else if (type === 'cost') weightCost = 1;
-    else if (type === 'combined') { weightPenalty = 1; weightCost = 1; }
-    else if (type === 'lostSales') { weightLostSales = 1000; }
+    if (type === 'time') {
+        weightPenalty = 1;
+    } else if (type === 'cost') {
+        weightCost = 1;
+    } else if (type === 'combined') {
+        weightPenalty = state.penaltyWeight / 100;
+        weightCost = state.costWeight / 100;
+    } else if (type === 'lostSales') {
+        weightLostSales = 1000;
+    }
 
     let inventory = Array(5).fill(0);
     let backlog = Array(5).fill(0);
@@ -461,7 +496,10 @@ function renderCurrentResults() {
 
     let html = `
         <div class="card full-width">
-            <h3>Performance Summary (${type})</h3>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h3>Performance Summary (${type})</h3>
+                ${type === 'combined' ? `<span style="font-size:0.9em; color:#666;">Weights: ${state.penaltyWeight}% Penalty / ${state.costWeight}% Cost</span>` : ''}
+            </div>
             <div class="form-row">
                 <div class="stat-box"><div class="stat-value">${res.L1.totalPenalty + res.L2.totalPenalty} units</div><div class="stat-label">Total Transit Penalty</div></div>
                 <div class="stat-box"><div class="stat-value">$${res.L1.totalCost + res.L2.totalCost}</div><div class="stat-label">Total Transit Cost</div></div>
