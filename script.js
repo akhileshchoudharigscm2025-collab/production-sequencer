@@ -463,7 +463,7 @@ function renderCurrentResults() {
         <div class="card full-width">
             <h3>Performance Summary (${type})</h3>
             <div class="form-row">
-                <div class="stat-box"><div class="stat-value">${res.L1.totalTime + res.L2.totalTime} min</div><div class="stat-label">Total Transit Time</div></div>
+                <div class="stat-box"><div class="stat-value">${res.L1.totalTime + res.L2.totalTime} units</div><div class="stat-label">Total Transit Penalty</div></div>
                 <div class="stat-box"><div class="stat-value">$${res.L1.totalCost + res.L2.totalCost}</div><div class="stat-label">Total Transit Cost</div></div>
                 <div class="stat-box"><div class="stat-value">${res.L1.totalLostSales + res.L2.totalLostSales} units</div><div class="stat-label">Lost Sales</div></div>
             </div>
@@ -537,7 +537,7 @@ function renderDashboard() {
         chartHtml += `
             <div class="chart-group">
                 <div class="chart-bars">
-                    <div class="bar time" style="height: ${Math.max(hTime, 5)}%" data-value="Time: ${res.totalTime}m"></div>
+                    <div class="bar time" style="height: ${Math.max(hTime, 5)}%" data-value="Penalty: ${res.totalTime} units"></div>
                     <div class="bar cost" style="height: ${Math.max(hCost, 5)}%" data-value="Cost: $${res.totalCost}"></div>
                     <div class="bar lost" style="height: ${Math.max(hLost, 5)}%" data-value="Lost: ${res.totalLostSales}"></div>
                 </div>
@@ -550,7 +550,7 @@ function renderDashboard() {
     chartContainer.innerHTML = `
         <div style="width:100%; display:flex; flex-direction:column; align-items:center;">
             <div class="legend">
-                <div class="legend-item"><div class="dot" style="background:#3498db"></div> Time</div>
+                <div class="legend-item"><div class="dot" style="background:#3498db"></div> Penalty</div>
                 <div class="legend-item"><div class="dot" style="background:#e74c3c"></div> Cost</div>
                 <div class="legend-item"><div class="dot" style="background:#f1c40f"></div> Lost Sales</div>
             </div>
