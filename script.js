@@ -567,17 +567,14 @@ function solveLine(demandMatrix, type) {
             let amountNeeded = cand.mandatory + cand.desirable;
             let trans = getTransition(lastProduct, p);
 
-            if (remainingCapacity < trans.penalty) break;
-
-            // Transition
+            // Transition Calculation (Minutes, does not consume Units capacity)
             if (lastProduct !== p && lastProduct !== -1) {
-                remainingCapacity -= trans.penalty;
                 totalPenalty += trans.penalty;
                 totalCost += trans.cost;
             }
             lastProduct = p;
 
-            // Production
+            // Production (Consumes Units capacity)
             let maxPossible = remainingCapacity;
             let amountToProduce = Math.min(amountNeeded, maxPossible, state.maxBatchSize);
 
@@ -674,37 +671,34 @@ function solveLineLookAhead(demandMatrix, type) {
             return scoreA - scoreB;
         });
 
-        for (let cand of candidates) {
-            if (batchesToday >= state.maxBatches) break;
-            let trans = getTransition(lastProduct, cand.p);
-            if (remainingCapacity < trans.penalty) break;
-
-            if (lastProduct !== cand.p && lastProduct !== -1) {
-                remainingCapacity -= trans.penalty;
-                totalPenalty += trans.penalty;
-                totalCost += trans.cost;
-            }
-            lastProduct = cand.p;
-
-            let amountToProduce = Math.min(cand.mandatory + cand.desirable, remainingCapacity, state.maxBatchSize);
-            if (amountToProduce > 0) {
-                remainingCapacity -= amountToProduce;
-                batchesToday++;
-                daySchedule.push({ p: cand.p, amount: amountToProduce });
-                let produced = amountToProduce;
-                if (cand.mandatory > 0) { let met = Math.min(produced, cand.mandatory); cand.mandatory -= met; produced -= met; backlog[cand.p] -= met; }
-                if (produced > 0) { let metToday = Math.min(produced, cand.desirable); cand.desirable -= metToday; produced -= metToday; inventory[cand.p] += produced; }
-            }
+        let trans = getTransition(lastProduct, cand.p);
+        // Transition Calculation (Minutes, does not consume Units capacity)
+        if (lastProduct !== cand.p && lastProduct !== -1) {
+            totalPenalty += trans.penalty;
+            totalCost += trans.cost;
         }
+        lastProduct = cand.p;
 
-        let dayInventory = [...inventory], dayLostSales = Array(5).fill(0);
-        candidates.forEach(c => {
-            if (c.mandatory > 0) { totalLostSales += c.mandatory; dayLostSales[c.p] = c.mandatory; backlog[c.p] = 0; }
-            if (c.desirable > 0) backlog[c.p] += c.desirable;
-        });
-        schedule.push({ day, events: daySchedule, inventory: dayInventory, lostSales: dayLostSales });
+        // Production (Consumes Units capacity)
+        let amountToProduce = Math.min(cand.mandatory + cand.desirable, remainingCapacity, state.maxBatchSize);
+        if (amountToProduce > 0) {
+            remainingCapacity -= amountToProduce;
+            batchesToday++;
+            daySchedule.push({ p: cand.p, amount: amountToProduce });
+            let produced = amountToProduce;
+            if (cand.mandatory > 0) { let met = Math.min(produced, cand.mandatory); cand.mandatory -= met; produced -= met; backlog[cand.p] -= met; }
+            if (produced > 0) { let metToday = Math.min(produced, cand.desirable); cand.desirable -= metToday; produced -= metToday; inventory[cand.p] += produced; }
+        }
     }
-    return { schedule, totalPenalty, totalCost, totalLostSales };
+
+    let dayInventory = [...inventory], dayLostSales = Array(5).fill(0);
+    candidates.forEach(c => {
+        if (c.mandatory > 0) { totalLostSales += c.mandatory; dayLostSales[c.p] = c.mandatory; backlog[c.p] = 0; }
+        if (c.desirable > 0) backlog[c.p] += c.desirable;
+    });
+    schedule.push({ day, events: daySchedule, inventory: dayInventory, lostSales: dayLostSales });
+}
+return { schedule, totalPenalty, totalCost, totalLostSales };
 }
 
 /**
@@ -766,15 +760,14 @@ function solveLineRandomized(demandMatrix, type, randomness = 0.1) {
             let cand = candidates.splice(idx, 1)[0];
 
             let trans = getTransition(lastProduct, cand.p);
-            if (remainingCapacity < trans.penalty) continue;
-
+            // Transition Calculation (Minutes, does not consume Units capacity)
             if (lastProduct !== cand.p && lastProduct !== -1) {
-                remainingCapacity -= trans.penalty;
                 totalPenalty += trans.penalty;
                 totalCost += trans.cost;
             }
             lastProduct = cand.p;
 
+            // Production (Consumes Units capacity)
             let amountToProduce = Math.min(cand.mandatory + cand.desirable, remainingCapacity, state.maxBatchSize);
             if (amountToProduce > 0) {
                 remainingCapacity -= amountToProduce;
@@ -823,7 +816,7 @@ function renderCurrentResults() {
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <h3>Performance Summary (${type})</h3>
                 <div style="text-align:right">
-                    <div style="font-size:0.9em; color:#666;">
+                    <div style="font-size:0.9em; color:#666; margin-bottom:4px;">
                         Strategy: 
                         <select id="strategySelector" onchange="state.optimizationMethod = this.value; saveState(); runOptimization();" style="font-weight:bold; border:1px solid #ccc; border-radius:4px; padding:2px 4px; background:white;">
                             <option value="auto" ${state.optimizationMethod === 'auto' ? 'selected' : ''}>Auto-Select (Best Performer)</option>
@@ -833,10 +826,13 @@ function renderCurrentResults() {
                             <option value="search" ${state.optimizationMethod === 'search' ? 'selected' : ''}>Global Search (Simulated Annealing)</option>
                         </select>
                     </div>
-                    ${type === 'combined' ? `<div style="font-size:0.8em; color:#888;">Weights: ${state.penaltyWeight}% Penalty / ${state.costWeight}% Cost</div>` : ''}
+                    <div style="font-size:0.8rem; color:#888;">
+                        Used: <strong>${res.strategyUsed || 'Unknown'}</strong>
+                        ${type === 'combined' ? ` | Weights: ${state.penaltyWeight}% / ${state.costWeight}%` : ''}
+                    </div>
                 </div>
             </div>
-            <div class="form-row">
+            <div class="form-row" style="margin-top:10px;">
                 <div class="stat-box"><div class="stat-value">${(res.L1.totalPenalty + res.L2.totalPenalty).toFixed(0)} min</div><div class="stat-label">Total Transit Time</div></div>
                 <div class="stat-box"><div class="stat-value">$${res.L1.totalCost + res.L2.totalCost}</div><div class="stat-label">Total Transit Cost</div></div>
                 <div class="stat-box"><div class="stat-value">${res.L1.totalLostSales + res.L2.totalLostSales} units</div><div class="stat-label">Lost Sales</div></div>

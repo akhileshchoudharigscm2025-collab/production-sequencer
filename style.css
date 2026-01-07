@@ -196,11 +196,19 @@ nav {
 
 .form-row {
     display: flex;
-    gap: 20px;
+    gap: 15px;
+    flex-wrap: wrap;
+    align-items: flex-end;
 }
 
 .form-group {
     flex: 1;
+    min-width: 120px;
+}
+
+.form-group.wide {
+    flex: 2;
+    min-width: 200px;
 }
 
 .form-group label {
@@ -209,13 +217,21 @@ nav {
     font-weight: 600;
     margin-bottom: 5px;
     color: #555;
+    white-space: nowrap;
 }
 
-.form-group input {
+.form-group input,
+.form-group select {
     width: 100%;
     padding: 8px;
     border: 1px solid #ccc;
     border-radius: 3px;
+    background-color: white;
+}
+
+select {
+    width: 100%;
+    max-width: 100%;
 }
 
 /* Spreadsheet Grids */
